@@ -94,8 +94,11 @@ def cmd_fetch_mediacloud(args) -> None:
         sys.exit(f"Media Cloud: {e}")
     finally:
         store.close()
-    if failed and failed == sum(1 for c in cfg.countries if c.mediacloud):
+    if len(failed) == sum(1 for c in cfg.countries if c.mediacloud):
         sys.exit("Every Media Cloud country failed. Nothing was fetched.")
+    if failed:
+        # Non-zero so the step is marked as failed; the workflow carries on anyway.
+        sys.exit(f"Media Cloud failed for: {', '.join(failed)}. The other countries were saved.")
 
 
 def cmd_mc_collections(args) -> None:

@@ -81,7 +81,7 @@ def test_fetch_mediacloud_stores_counts_and_pages(config_file):
     search = FakeSearch([([story(1), story(2)], "next"), ([story(3)], None)])
     failed = fetch_mediacloud(cfg, store, date(2026, 9, 1), date(2026, 9, 30),
                               clients=(search, FakeDirectory([NL])))
-    assert failed == 0
+    assert failed == []
     assert search.queries == [('"long covid" OR "ME/CVS" OR "postcovid"', [34412100])]  # BE has no collection
     assert [tuple(r) for r in store.mc_daily_counts()] == [("NL", "2026-09-01", 3, 1000), ("NL", "2026-09-02", 1, 900)]
     rows = store.articles_with_labels()
@@ -93,7 +93,41 @@ def test_fetch_mediacloud_reports_bad_collection(config_file):
     store = Store(cfg.database)
     failed = fetch_mediacloud(cfg, store, date(2026, 9, 1), date(2026, 9, 30),
                               clients=(FakeSearch([]), FakeDirectory([])))
-    assert failed == 1
+    assert failed == ["Netherlands"]
+
+
+class FlakySearch(FakeSearch):
+    """Times out a set number of times before answering."""
+    def __init__(self, pages, timeouts):
+        super().__init__(pages)
+        self.timeouts = timeouts
+
+    def story_count_over_time(self, *a, **k):
+        if self.timeouts:
+            self.timeouts -= 1
+            raise TimeoutError("Read timed out. (read timeout=60)")
+        return super().story_count_over_time(*a, **k)
+
+
+def test_fetch_mediacloud_retries_timeouts(config_file):
+    cfg = load_config(config_file)
+    store = Store(cfg.database)
+    waits = []
+    failed = fetch_mediacloud(cfg, store, date(2026, 9, 1), date(2026, 9, 30),
+                              clients=(FlakySearch([([story(1)], None)], timeouts=2), FakeDirectory([NL])),
+                              sleep=waits.append)
+    assert failed == [] and len(waits) == 2
+    assert len(store.articles_with_labels()) == 1
+
+
+def test_fetch_mediacloud_gives_up_after_three_tries(config_file):
+    cfg = load_config(config_file)
+    store = Store(cfg.database)
+    waits = []
+    failed = fetch_mediacloud(cfg, store, date(2026, 9, 1), date(2026, 9, 30),
+                              clients=(FlakySearch([], timeouts=5), FakeDirectory([NL])),
+                              sleep=waits.append)
+    assert failed == ["Netherlands"] and len(waits) == 2
 
 
 def test_report_shows_both_sources(tmp_path, config_file):

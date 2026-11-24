@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time as _time
 from datetime import date, datetime, time, timezone
 from urllib.parse import urlparse
 
@@ -33,7 +34,30 @@ def _client(api_key: str | None):
     key = api_key or os.environ.get("MC_API_KEY")
     if not key:
         raise MediaCloudError("no MC_API_KEY set")
-    return mediacloud.api.SearchApi(key), mediacloud.api.DirectoryApi(key)
+    search = mediacloud.api.SearchApi(key)
+    # Searches over big collections (US, UK, DE) with our long query can take
+    # minutes; the library's default 60-second read timeout cut them off.
+    search.TIMEOUT_SECS = SEARCH_TIMEOUT_SECS
+    return search, mediacloud.api.DirectoryApi(key)
+
+
+SEARCH_TIMEOUT_SECS = 300
+TRIES = 3
+RETRY_WAIT_SECS = 60
+
+
+def _retry(fn, *args, tries: int = TRIES, wait: float = RETRY_WAIT_SECS, label: str = "", sleep=_time.sleep, **kwargs):
+    """Call fn, trying again after network errors and timeouts."""
+    for attempt in range(1, tries + 1):
+        try:
+            return fn(*args, **kwargs)
+        except MediaCloudError:
+            raise
+        except Exception as e:
+            if attempt == tries:
+                raise
+            print(f"  {label}: attempt {attempt} failed ({e}); trying again in {wait:.0f}s", file=sys.stderr)
+            sleep(wait)
 
 
 def find_collections(directory, name: str) -> list[dict]:
@@ -74,29 +98,31 @@ def story_to_article(story: dict, country: Country) -> Article:
 
 
 def fetch_mediacloud(cfg: Config, store: Store, start: date, end: date,
-                     max_pages: int = 10, api_key: str | None = None, clients=None) -> int:
+                     max_pages: int = 10, api_key: str | None = None, clients=None,
+                     sleep=_time.sleep) -> list[str]:
     """Fetch counts and article lists for each country that has a collection.
 
-    Returns the number of countries that failed.
+    Returns the names of the countries that failed.
     """
     query = cfg.mediacloud_query()
     if not query:
         raise MediaCloudError("no [mediacloud] terms in the config")
     search, directory = clients or _client(api_key)
     print(f"Media Cloud query: {query}\nPeriod: {start} to {end}")
-    failed = 0
+    failed = []
     for c in cfg.countries:
         if not c.mediacloud:
             continue
         try:
             cid = resolve_collection(directory, c.mediacloud)
-            points = search.story_count_over_time(query, start, end, collection_ids=[cid])
+            points = _retry(search.story_count_over_time, query, start, end, collection_ids=[cid],
+                            label=c.name, sleep=sleep)
             counts = [(str(p["date"])[:10], int(p["count"]), int(p.get("total_count") or 0)) for p in points]
             store.upsert_mc_counts(c.code, counts)
             stories, token, pages = [], None, 0
             while pages < max_pages:
-                page, token = search.story_list(query, start, end, collection_ids=[cid],
-                                                pagination_token=token)
+                page, token = _retry(search.story_list, query, start, end, collection_ids=[cid],
+                                     pagination_token=token, label=c.name, sleep=sleep)
                 stories += page
                 pages += 1
                 if not token:
@@ -105,7 +131,9 @@ def fetch_mediacloud(cfg: Config, store: Store, start: date, end: date,
                                         source="mediacloud")
         except Exception as e:  # API errors, bad collection names, network trouble
             print(f"  {c.name}: Media Cloud error: {e}", file=sys.stderr)
-            failed += 1
+            if os.environ.get("GITHUB_ACTIONS"):  # show it on the run's summary page
+                print(f"::warning title=Media Cloud::{c.name} failed: {e}")
+            failed.append(c.name)
             continue
         more = "  (more stories than were listed; raise max_pages)" if token else ""
         print(f"  {c.name}: {sum(n for _, n, _ in counts)} stories counted in collection {cid}, "
