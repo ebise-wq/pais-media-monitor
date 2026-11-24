@@ -130,9 +130,10 @@ is used as a second source.
 
 `.github/workflows/fetch.yml` runs on GitHub's machines every Monday. It:
 
-1. fetches the last 14 days from Media Cloud (if the `MC_API_KEY` secret
-   exists) and from GDELT, using `config.toml`. "Run workflow" also lets you
-   pick a single source;
+1. fetches the last 14 days from Media Cloud (needs the `MC_API_KEY`
+   secret), using `config.toml`. GDELT is off in scheduled runs since
+   November 2026: from GitHub's machines it refused most requests. "Run
+   workflow" can still fetch it by hand (sources: gdelt or all);
 2. labels up to 200 new articles with Claude, but only if the repository has
    an `ANTHROPIC_API_KEY` secret (Settings > Secrets and variables > Actions);
 3. rebuilds the report into `docs/` (`docs/index.html`, plus CSV files);

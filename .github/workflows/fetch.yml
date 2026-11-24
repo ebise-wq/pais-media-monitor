@@ -14,8 +14,8 @@ on:
       sources:
         description: "Which sources to fetch"
         type: choice
-        options: [all, gdelt, mediacloud]
-        default: all
+        options: [mediacloud, all, gdelt]
+        default: mediacloud
 
 permissions:
   contents: write
@@ -31,7 +31,10 @@ jobs:
     env:
       PYTHONUNBUFFERED: "1"  # show progress in the log as it happens
       DAYS: ${{ inputs.days || '14' }}
-      SOURCES: ${{ inputs.sources || 'all' }}
+      # Scheduled runs use Media Cloud only. GDELT refused most requests from
+      # GitHub's machines (no Dutch or Belgian data since 1 October 2026) and
+      # made runs take two hours; it can still be picked by hand.
+      SOURCES: ${{ inputs.sources || 'mediacloud' }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       MC_API_KEY: ${{ secrets.MC_API_KEY }}
     steps:
